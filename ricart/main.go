@@ -109,15 +109,26 @@ func (n *RicartNode) startServer(port string) {
 }
 
 func (n *RicartNode) connectToPeers() {
-	for peerID, addr := range n.peers {
-		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			log.Fatalf("[Node %d] Failed to connect to Node %d: %v", n.id, peerID, err)
-		}
-		n.connections[peerID] = conn
-		n.clients[peerID] = proto.NewRicartServiceClient(conn)
-	}
-	log.Printf("[Node %d] Connected to all peers", n.id)
+    for peerID, addr := range n.peers {
+        for {
+            ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+            conn, err := grpc.DialContext(
+                ctx, addr,
+                grpc.WithTransportCredentials(insecure.NewCredentials()),
+                grpc.WithBlock(),
+            )
+            cancel()
+            if err == nil {
+                n.connections[peerID] = conn
+                n.clients[peerID] = proto.NewRicartServiceClient(conn)
+                log.Printf("[Node %d] Connected to Node %d at %s", n.id, peerID, addr)
+                break
+            }
+            log.Printf("[Node %d] Retry connect to Node %d (%s): %v", n.id, peerID, addr, err)
+            time.Sleep(1 * time.Second)
+        }
+    }
+    log.Printf("[Node %d] Connected to all peers", n.id)
 }
 
 func (n *RicartNode) requestCriticalSection() {
