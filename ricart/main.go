@@ -269,4 +269,4 @@ func main() {
 	node.requestCriticalSection()
 
 	select {}
-}cd ricart
+}
