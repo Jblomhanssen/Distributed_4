@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package ricart;
+
+option go_package = "ricart/proto;proto";
+
+// --- Message types ---
+
+// RequestMessage is sent when a node wants to enter the critical section.
+message RequestMessage {
+  int32 node_id = 1;      // Unique ID of the requesting node
+  int64 timestamp = 2;    // Logical clock or timestamp
+}
+
+// ReplyMessage is sent to grant permission to enter the critical section.
+message ReplyMessage {
+  int32 node_id = 1;      // ID of the node granting permission
+}
+
+// ReleaseMessage is sent after the node exits the critical section.
+message ReleaseMessage {
+  int32 node_id = 1;      // ID of the node releasing the critical section
+}
+
+// --- Service definition ---
+
+service RicartService {
+  rpc RequestAccess(RequestMessage) returns (ReplyMessage);
+  rpc ReleaseAccess(ReleaseMessage) returns (ReplyMessage);
+}
