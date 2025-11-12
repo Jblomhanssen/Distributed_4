@@ -13,11 +13,9 @@ message ReplyMessage {
   int32 node_id = 1;
 }
 
-message ReleaseMessage {
-  int32 node_id = 1;
-}
+message Empty {}
 
 service RicartService {
-  rpc SendRequest(RequestMessage) returns (ReplyMessage);
-  rpc SendRelease(ReleaseMessage) returns (ReplyMessage);
+  rpc SendRequest(RequestMessage) returns (Empty);
+  rpc SendReply(ReplyMessage) returns (Empty);
 }

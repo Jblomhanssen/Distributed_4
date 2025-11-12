@@ -16,7 +16,7 @@ import (
 	"ricart/proto"
 )
 
-// Shared resource that all nodes will try to access
+// Shared resource simulation
 type SharedCounter struct {
 	mu    sync.Mutex
 	value int
@@ -42,42 +42,52 @@ type RicartNode struct {
 	mu            sync.Mutex
 	id            int
 	timestamp     int64
-	replyCount    int
 	requesting    bool
 	deferredQueue []int
+	replyChan     chan int
 	peers         map[int]string
 	server        *grpc.Server
 	clients       map[int]proto.RicartServiceClient
 	connections   map[int]*grpc.ClientConn
 }
 
-func (n *RicartNode) SendRequest(ctx context.Context, req *proto.RequestMessage) (*proto.ReplyMessage, error) {
+func (n *RicartNode) SendRequest(ctx context.Context, req *proto.RequestMessage) (*proto.Empty, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	log.Printf("[Node %d] Received request from Node %d (ts=%d)", n.id, req.NodeId, req.Timestamp)
 
-	// Determine if we should reply now or defer
 	shouldReply := !n.requesting ||
 		req.Timestamp < n.timestamp ||
 		(req.Timestamp == n.timestamp && req.NodeId < int32(n.id))
 
 	if shouldReply {
-		log.Printf("[Node %d] Sending reply to Node %d", n.id, req.NodeId)
-		return &proto.ReplyMessage{NodeId: int32(n.id)}, nil
+		// Send reply immediately
+		go n.sendReplyTo(int(req.NodeId))
+	} else {
+		// Defer the reply until we exit CS
+		log.Printf("[Node %d] Deferring reply to Node %d", n.id, req.NodeId)
+		n.deferredQueue = append(n.deferredQueue, int(req.NodeId))
 	}
 
-	// Defer the reply
-	log.Printf("[Node %d] Deferring reply to Node %d", n.id, req.NodeId)
-	n.deferredQueue = append(n.deferredQueue, int(req.NodeId))
-	
-	// Return empty reply - the actual reply will be sent later via SendRelease
-	return &proto.ReplyMessage{NodeId: -1}, nil
+	return &proto.Empty{}, nil
 }
 
-func (n *RicartNode) SendRelease(ctx context.Context, req *proto.ReleaseMessage) (*proto.ReplyMessage, error) {
-	log.Printf("[Node %d] Received release from Node %d", n.id, req.NodeId)
-	return &proto.ReplyMessage{NodeId: int32(n.id)}, nil
+func (n *RicartNode) SendReply(ctx context.Context, reply *proto.ReplyMessage) (*proto.Empty, error) {
+	log.Printf("[Node %d] Received reply from Node %d", n.id, reply.NodeId)
+	n.replyChan <- int(reply.NodeId)
+	return &proto.Empty{}, nil
+}
+
+func (n *RicartNode) sendReplyTo(nodeID int) {
+	client := n.clients[nodeID]
+	reply := &proto.ReplyMessage{NodeId: int32(n.id)}
+	
+	log.Printf("[Node %d] Sending reply to Node %d", n.id, nodeID)
+	_, err := client.SendReply(context.Background(), reply)
+	if err != nil {
+		log.Printf("[Node %d] Error sending reply to %d: %v", n.id, nodeID, err)
+	}
 }
 
 func (n *RicartNode) startServer(port string) {
@@ -111,53 +121,35 @@ func (n *RicartNode) connectToPeers() {
 }
 
 func (n *RicartNode) requestCriticalSection() {
-	// Start request phase
 	n.mu.Lock()
 	n.requesting = true
 	n.timestamp = time.Now().UnixNano()
-	n.replyCount = 0
 	numPeers := len(n.clients)
 	log.Printf("[Node %d] Requesting CS with timestamp %d", n.id, n.timestamp)
 	n.mu.Unlock()
 
 	// Send request to all peers
-	replyChan := make(chan bool, numPeers)
 	for peerID, client := range n.clients {
 		go func(pid int, c proto.RicartServiceClient) {
 			req := &proto.RequestMessage{
 				NodeId:    int32(n.id),
 				Timestamp: n.timestamp,
 			}
-
-			reply, err := c.SendRequest(context.Background(), req)
+			_, err := c.SendRequest(context.Background(), req)
 			if err != nil {
-				log.Printf("[Node %d] Error requesting from Node %d: %v", n.id, pid, err)
-				return
-			}
-
-			// Check if we got a real reply or deferred (-1)
-			if reply.NodeId != -1 {
-				log.Printf("[Node %d] Got reply from Node %d", n.id, reply.NodeId)
-				replyChan <- true
-			} else {
-				// Reply was deferred, we'll get it later via release
-				log.Printf("[Node %d] Reply from Node %d was deferred", n.id, pid)
-				replyChan <- true
+				log.Printf("[Node %d] Error sending request to %d: %v", n.id, pid, err)
 			}
 		}(peerID, client)
 	}
 
-	// Wait for all replies
+	// Wait for replies from all peers
 	for i := 0; i < numPeers; i++ {
-		<-replyChan
+		<-n.replyChan
 	}
 
 	log.Printf("[Node %d] Received all replies, entering CS", n.id)
 
-	// Enter critical section
 	n.enterCriticalSection()
-
-	// Exit and release
 	n.exitCriticalSection()
 }
 
@@ -176,14 +168,14 @@ func (n *RicartNode) enterCriticalSection() {
 		fmt.Sscanf(string(buf[:bytesRead]), "%d", &oldValue)
 	}
 
-	log.Printf("[Node %d] Read shared counter value: %d", n.id, oldValue)
+	log.Printf("[Node %d] Read shared counter: %d", n.id, oldValue)
 	
-	// Simulate some work on the shared resource
+	// Simulate some work
 	time.Sleep(500 * time.Millisecond)
 	
 	newValue := oldValue + 1
 	
-	// Write new value
+	// Write new value back
 	sharedResource.file.Seek(0, 0)
 	sharedResource.file.Truncate(0)
 	fmt.Fprintf(sharedResource.file, "%d\n", newValue)
@@ -192,7 +184,7 @@ func (n *RicartNode) enterCriticalSection() {
 	sharedResource.value = newValue
 	sharedResource.mu.Unlock()
 
-	log.Printf("[Node %d] Updated shared counter: %d -> %d", n.id, oldValue, newValue)
+	log.Printf("[Node %d] Updated counter: %d -> %d", n.id, oldValue, newValue)
 	log.Printf("[Node %d] ===== EXITING CRITICAL SECTION =====", n.id)
 }
 
@@ -200,26 +192,20 @@ func (n *RicartNode) exitCriticalSection() {
 	n.mu.Lock()
 	n.requesting = false
 	
-	// Get deferred requests and clear queue
+	// Get all deferred requests
 	deferred := make([]int, len(n.deferredQueue))
 	copy(deferred, n.deferredQueue)
 	n.deferredQueue = nil
 	
 	n.mu.Unlock()
 
-	// Send release to all peers (including those we deferred)
-	for peerID, client := range n.clients {
-		go func(pid int, c proto.RicartServiceClient) {
-			releaseMsg := &proto.ReleaseMessage{NodeId: int32(n.id)}
-			_, err := c.SendRelease(context.Background(), releaseMsg)
-			if err != nil {
-				log.Printf("[Node %d] Error sending release to Node %d: %v", n.id, pid, err)
-			}
-		}(peerID, client)
+	// Now send the deferred replies
+	for _, nodeID := range deferred {
+		go n.sendReplyTo(nodeID)
 	}
 
 	if len(deferred) > 0 {
-		log.Printf("[Node %d] Sent deferred replies to %d nodes", n.id, len(deferred))
+		log.Printf("[Node %d] Sent %d deferred replies", n.id, len(deferred))
 	}
 }
 
@@ -254,16 +240,16 @@ func main() {
 
 	log.Printf("Starting Node %d with %d peers", nodeID, len(peers))
 
-	// Initialize shared resource (only once, globally)
 	if sharedResource == nil {
 		initSharedResource()
 	}
 
 	node := &RicartNode{
-		id:          nodeID,
-		peers:       peers,
-		clients:     make(map[int]proto.RicartServiceClient),
+		id:        nodeID,
+		peers:     peers,
+		clients:   make(map[int]proto.RicartServiceClient),
 		connections: make(map[int]*grpc.ClientConn),
+		replyChan: make(chan int, len(peers)),
 	}
 
 	node.startServer(port)
@@ -271,18 +257,16 @@ func main() {
 	node.connectToPeers()
 	time.Sleep(1 * time.Second)
 
-	// Stagger the requests so nodes compete
+	// Stagger requests to create contention
 	delay := time.Duration(nodeID) * 500 * time.Millisecond
 	log.Printf("[Node %d] Waiting %v before requesting CS", nodeID, delay)
 	time.Sleep(delay)
 
-	// Request CS twice to show it works multiple times
 	node.requestCriticalSection()
 
 	time.Sleep(3 * time.Second)
 	log.Printf("[Node %d] Requesting CS again", nodeID)
 	node.requestCriticalSection()
 
-	// Keep running
 	select {}
-}
+}cd ricart
