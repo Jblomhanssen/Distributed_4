@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package ricart;
 
-option go_package = "ricart/proto;proto";
+option go_package = "ricart/proto/proto;proto";
 
 message RequestMessage {
   int32 node_id = 1;
