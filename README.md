@@ -1,4 +1,4 @@
-In three separate terminals, run:
+In three separate terminals (cd ricart), run:
 
 # Node 1
 go run main.go 1 :5001 2=localhost:5002 3=localhost:5003
