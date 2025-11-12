@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc"
 	"ricart/proto"
+
+	"google.golang.org/grpc"
 )
 
-// RicartNode represents a node in the Ricart-Agrawala algorithm
 type RicartNode struct {
 	proto.UnimplementedRicartServiceServer
 
@@ -32,8 +32,6 @@ type RicartNode struct {
 	cancel        context.CancelFunc
 }
 
-// --- RPC methods ---
-
 func (n *RicartNode) RequestAccess(ctx context.Context, req *proto.RequestMessage) (*proto.ReplyMessage, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -41,7 +39,7 @@ func (n *RicartNode) RequestAccess(ctx context.Context, req *proto.RequestMessag
 	fmt.Printf("[Node %d] Received REQUEST from Node %d (ts=%d)\n", n.id, req.NodeId, req.Timestamp)
 
 	if !n.requesting || req.Timestamp < n.timestamp || (req.Timestamp == n.timestamp && req.NodeId < int32(n.id)) {
-		// Grant permission immediately
+
 		return &proto.ReplyMessage{NodeId: int32(n.id)}, nil
 	}
 
@@ -69,8 +67,6 @@ func (n *RicartNode) ReleaseAccess(ctx context.Context, req *proto.ReleaseMessag
 	}
 	return &proto.ReplyMessage{NodeId: int32(n.id)}, nil
 }
-
-// --- Node logic ---
 
 func (n *RicartNode) startServer(port string) {
 	lis, err := net.Listen("tcp", port)
@@ -117,7 +113,6 @@ func (n *RicartNode) requestCriticalSection() {
 		}(peerID, client)
 	}
 
-	// Wait until all replies received
 	for {
 		time.Sleep(200 * time.Millisecond)
 		n.mu.Lock()
@@ -128,17 +123,15 @@ func (n *RicartNode) requestCriticalSection() {
 		n.mu.Unlock()
 	}
 
-	// Enter critical section
 	n.enterCriticalSection()
 
-	// Exit and send release
 	n.releaseCriticalSection()
 }
 
 func (n *RicartNode) enterCriticalSection() {
-	fmt.Printf("🟢 [Node %d] ENTERING Critical Section 🟢\n", n.id)
+	fmt.Printf("[Node %d] ENTERING Critical Section\n", n.id)
 	time.Sleep(2 * time.Second)
-	fmt.Printf("🔴 [Node %d] LEAVING Critical Section 🔴\n", n.id)
+	fmt.Printf("[Node %d] LEAVING Critical Section\n", n.id)
 }
 
 func (n *RicartNode) releaseCriticalSection() {
@@ -152,8 +145,6 @@ func (n *RicartNode) releaseCriticalSection() {
 		})
 	}
 }
-
-// --- Main setup ---
 
 func main() {
 	if len(os.Args) < 3 {
@@ -188,7 +179,6 @@ func main() {
 	time.Sleep(1 * time.Second)
 	node.connectToPeers()
 
-	// Example: each node tries to enter CS after some delay
 	time.Sleep(time.Duration(nodeID) * 2 * time.Second)
 	node.requestCriticalSection()
 
